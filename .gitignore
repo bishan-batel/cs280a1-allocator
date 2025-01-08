@@ -1,0 +1,8 @@
+build/
+*.exe
+*student*
+*.zip
+*.o
+*.log
+difference*
+.cache/
