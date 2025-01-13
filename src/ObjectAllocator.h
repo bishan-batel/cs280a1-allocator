@@ -1,8 +1,8 @@
 #ifndef OBJECTALLOCATORH
 #define OBJECTALLOCATORH
 
+#include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <string>
 
 // If the client doesn't specify these:
@@ -77,11 +77,6 @@ using i32 = std::int32_t;
 using i64 = std::int64_t;
 
 /**
- * @brief Biggest Integer type that the current platform can use
- */
-using imax = std::intmax_t;
-
-/**
  * @brief Integer pointer typically used for pointer arithmetic
  */
 using iptr = std::intptr_t;
@@ -89,7 +84,7 @@ using iptr = std::intptr_t;
 /**
   Exception class
 */
-class OAException final : std::exception {
+class OAException final {
 public:
   /**
     Possible exception codes
@@ -126,7 +121,7 @@ public:
    *
    * @return The NUL-terminated string representing the error.
    */
-  inline const char *what() const noexcept override { return message.c_str(); }
+  inline const char *what() const noexcept { return message.c_str(); }
 
 private:
   OA_EXCEPTION error_code; //!< The error code (one of the 5)
@@ -342,13 +337,49 @@ public:
   ObjectAllocator(const ObjectAllocator &oa) = delete; //!< Do not implement!
   ObjectAllocator &operator=(const ObjectAllocator &oa) = delete; //!< Do not implement!
 private:
-  // Some "suggested" members (only a suggestion!)
-  GenericObject *page_list{nullptr}; //!< the beginning of the list of pages
-  GenericObject *free_list{nullptr}; //!< the beginning of the list of objects
+  /**
+   * @brief Converts bytes to a generic object reference
+   */
+  static GenericObject &as_list(u8 *bytes);
 
-  usize object_size;
+  /**
+   * @brief Converts bytes to a generic object reference
+   */
+  static const GenericObject &as_list(const u8 *bytes);
+
+  /**
+   * @brief Converts a generic object to its bytes repr
+   */
+  static const u8 *as_bytes(const GenericObject *bytes);
+
+  /**
+   * @brief Converts a generic object to its bytes repr
+   */
+  static u8 *as_bytes(GenericObject *bytes);
+
+  /**
+   * @brief Converts a generic object to its bytes repr
+   */
+  static const u8 *as_bytes(const GenericObject &bytes);
+
+  /**
+   * @brief Converts a generic object to its bytes repr
+   */
+  static u8 *as_bytes(GenericObject &bytes);
+
+  /**
+   * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
+   */
+  u8 *allocate_raw_page(GenericObject *next, u8 **free_list) const;
+
+  // Some "suggested" members (only a suggestion!)
+  u8 *page_list{nullptr}; //!< the beginning of the list of pages
+  u8 *free_list{nullptr}; //!< the beginning of the list of objects
+
   OAConfig config;
   OAStats statistics{};
+
+  usize object_size, page_size;
 
   // Lots of other private stuff...
 };
