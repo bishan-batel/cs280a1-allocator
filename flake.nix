@@ -22,6 +22,8 @@
             valgrind
             gcc
             xxd
+            lldb
+            gdb
           ];
 
           buildInputs = with pkgs; [

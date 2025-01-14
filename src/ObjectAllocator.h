@@ -133,7 +133,7 @@ private:
  */
 struct OAConfig final {
   static constexpr usize BASIC_HEADER_SIZE = sizeof(u32) + 1; //!< allocation number + flags
-  static constexpr usize EXTERNAL_HEADER_SIZE = sizeof(void *); //!< just a pointer
+  static constexpr usize EXTERNAL_HEADER_SIZE = sizeof(void*); //!< just a pointer
 
   /**
    * The different types of header blocks
@@ -154,14 +154,12 @@ struct OAConfig final {
      * @param type The kind of header blocks in use.
      * @param additional The number of user-defined additional bytes required.
      */
-    HeaderBlockInfo(HBLOCK_TYPE type = hbNone, unsigned additional = 0) :
-        type_(type), size_(0), additional_(additional) {
-      if (type_ == hbBasic)
-        size_ = BASIC_HEADER_SIZE;
+    HeaderBlockInfo(HBLOCK_TYPE type = hbNone, unsigned additional = 0)
+      : type_(type), size_(0), additional_(additional) {
+      if (type_ == hbBasic) size_ = BASIC_HEADER_SIZE;
       else if (type_ == hbExtended) // alloc # + use counter + flag byte + user-defined
         size_ = sizeof(unsigned int) + sizeof(unsigned short) + sizeof(char) + additional_;
-      else if (type_ == hbExternal)
-        size_ = EXTERNAL_HEADER_SIZE;
+      else if (type_ == hbExternal) size_ = EXTERNAL_HEADER_SIZE;
     };
   };
 
@@ -185,15 +183,21 @@ struct OAConfig final {
    *
    */
   OAConfig(
-      bool UseCPPMemManager = false,
-      unsigned ObjectsPerPage = DEFAULT_OBJECTS_PER_PAGE,
-      unsigned MaxPages = DEFAULT_MAX_PAGES,
-      bool DebugOn = false,
-      unsigned PadBytes = 0,
-      const HeaderBlockInfo &HBInfo = HeaderBlockInfo(),
-      unsigned Alignment = 0) :
-      UseCPPMemManager_(UseCPPMemManager), ObjectsPerPage_(ObjectsPerPage), MaxPages_(MaxPages), DebugOn_(DebugOn),
-      PadBytes_(PadBytes), HBlockInfo_(HBInfo), Alignment_(Alignment) {
+    bool UseCPPMemManager = false,
+    unsigned ObjectsPerPage = DEFAULT_OBJECTS_PER_PAGE,
+    unsigned MaxPages = DEFAULT_MAX_PAGES,
+    bool DebugOn = false,
+    unsigned PadBytes = 0,
+    const HeaderBlockInfo &HBInfo = HeaderBlockInfo(),
+    unsigned Alignment = 0
+  )
+    : UseCPPMemManager_(UseCPPMemManager),
+      ObjectsPerPage_(ObjectsPerPage),
+      MaxPages_(MaxPages),
+      DebugOn_(DebugOn),
+      PadBytes_(PadBytes),
+      HBlockInfo_(HBInfo),
+      Alignment_(Alignment) {
     HBlockInfo_ = HBInfo;
     LeftAlignSize_ = 0;
     InterAlignSize_ = 0;
@@ -217,8 +221,14 @@ struct OAStats final {
   /**
    * Constructor
    */
-  OAStats() :
-      ObjectSize_(0), PageSize_(0), FreeObjects_(0), ObjectsInUse_(0), PagesInUse_(0), MostObjects_(0), Allocations_(0),
+  OAStats()
+    : ObjectSize_(0),
+      PageSize_(0),
+      FreeObjects_(0),
+      ObjectsInUse_(0),
+      PagesInUse_(0),
+      MostObjects_(0),
+      Allocations_(0),
       Deallocations_(0) {};
 
   usize ObjectSize_; //!< size of each object
@@ -313,6 +323,7 @@ public:
   // Testing/Debugging/Statistic methods
 
   void SetDebugState(bool State);
+
   /**
    * returns a pointer to the internal free list
    * */
@@ -326,16 +337,16 @@ public:
   /**
    * returns the configuration parameters
    */
-  const OAConfig &GetConfig() const;
+  const OAConfig& GetConfig() const;
 
   /**
    * returns the statistics for the allocator
    */
-  const OAStats &GetStats() const;
+  const OAStats& GetStats() const;
 
   // Prevent copy construction and assignment
   ObjectAllocator(const ObjectAllocator &oa) = delete; //!< Do not implement!
-  ObjectAllocator &operator=(const ObjectAllocator &oa) = delete; //!< Do not implement!
+  ObjectAllocator& operator=(const ObjectAllocator &oa) = delete; //!< Do not implement!
 private:
   template<typename T>
   static bool all_bytes_eq(const T *span, const usize length, const u8 byte_pattern) {
@@ -352,19 +363,19 @@ private:
   /**
    * @brief Converts bytes to a generic object reference
    */
-  static GenericObject &as_list(u8 *bytes);
+  static GenericObject& as_list(u8 *bytes);
 
   /**
    * @brief Converts bytes to a generic object reference
    */
-  static const GenericObject &as_list(const u8 *bytes);
+  static const GenericObject& as_list(const u8 *bytes);
 
   /**
    * @brief Converts a generic object to its bytes repr
    */
   template<typename T>
   static const u8 *as_bytes(const T *bytes) {
-    return reinterpret_cast<const u8 *>(bytes);
+    return reinterpret_cast<const u8*>(bytes);
   }
 
   /**
@@ -372,7 +383,7 @@ private:
    */
   template<typename T>
   static u8 *as_bytes(T *bytes) {
-    return reinterpret_cast<u8 *>(bytes);
+    return reinterpret_cast<u8*>(bytes);
   }
 
   /**
@@ -394,7 +405,7 @@ private:
   /**
    * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
    */
-  u8 *allocate_raw_page(GenericObject *next, u8 **free_list);
+  u8 *allocate_raw_page(GenericObject *next, u8 *&free_list);
 
   // Some "suggested" members (only a suggestion!)
   u8 *page_list{nullptr}; //!< the beginning of the list of pages
