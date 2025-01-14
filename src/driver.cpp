@@ -10,7 +10,7 @@ using std::printf;
 int SHOWADDRESS1 = 0;    // DumpCallback
 int SHOWADDRESS2 = 0;    // ValidateCallback
 int SHOWREAL = 0;        // DumpPages, DumpPagesEx
-int SHOW_EXCEPTIONS = 0; // Show student exceptions in all tests
+int SHOW_EXCEPTIONS = 1; // Show student exceptions in all tests
 int EXTRA_CREDIT = 0;    // Run extra credit tests (Alignment, FreeEmptyPages)
 
 #include "ObjectAllocator.h"

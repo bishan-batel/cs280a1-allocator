@@ -337,6 +337,18 @@ public:
   ObjectAllocator(const ObjectAllocator &oa) = delete; //!< Do not implement!
   ObjectAllocator &operator=(const ObjectAllocator &oa) = delete; //!< Do not implement!
 private:
+  template<typename T>
+  static bool all_bytes_eq(const T *span, const usize length, const u8 byte_pattern) {
+    const u8 *begin = as_bytes(span);
+
+    bool eq{true};
+    for (usize i = 0; i < length; i++) {
+      eq = eq && begin[i] != byte_pattern;
+    }
+
+    return eq;
+  }
+
   /**
    * @brief Converts bytes to a generic object reference
    */
@@ -350,27 +362,39 @@ private:
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  static const u8 *as_bytes(const GenericObject *bytes);
+  template<typename T>
+  static const u8 *as_bytes(const T *bytes) {
+    return reinterpret_cast<const u8 *>(bytes);
+  }
 
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  static u8 *as_bytes(GenericObject *bytes);
+  template<typename T>
+  static u8 *as_bytes(T *bytes) {
+    return reinterpret_cast<u8 *>(bytes);
+  }
 
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  static const u8 *as_bytes(const GenericObject &bytes);
+  template<typename T>
+  static const u8 *as_bytes(const T &bytes) {
+    return as_bytes(&bytes);
+  }
 
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  static u8 *as_bytes(GenericObject &bytes);
+  template<typename T>
+  static u8 *as_bytes(T &bytes) {
+    return as_bytes(&bytes);
+  }
 
   /**
    * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
    */
-  u8 *allocate_raw_page(GenericObject *next, u8 **free_list) const;
+  u8 *allocate_raw_page(GenericObject *next, u8 **free_list);
 
   // Some "suggested" members (only a suggestion!)
   u8 *page_list{nullptr}; //!< the beginning of the list of pages
@@ -379,7 +403,7 @@ private:
   OAConfig config;
   OAStats statistics{};
 
-  usize object_size, page_size;
+  usize allocated_pages{0}, object_size, block_size, page_size;
 
   // Lots of other private stuff...
 };
