@@ -298,7 +298,7 @@ public:
    *
    * Throws an exception if the the object can't be freed. (Invalid object)
    */
-  void Free(void *Object);
+  void Free(void *block_void_ptr);
 
   /*
    * Calls the callback fn for each block still in use
@@ -405,7 +405,9 @@ private:
   /**
    * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
    */
-  u8 *allocate_raw_page(GenericObject *next, u8 *&free_list);
+  u8 *allocate_raw_page(GenericObject *next);
+
+  bool is_in_free_list(void* ptr) const;
 
   // Some "suggested" members (only a suggestion!)
   u8 *page_list{nullptr}; //!< the beginning of the list of pages

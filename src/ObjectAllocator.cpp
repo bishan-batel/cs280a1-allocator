@@ -2,6 +2,7 @@
 #include <cstring>
 
 // TODO: remove before submission
+#include <memory>
 #include <stdexcept>
 
 ObjectAllocator::ObjectAllocator(const usize obj_size, const OAConfig& config):
@@ -30,14 +31,21 @@ ObjectAllocator::ObjectAllocator(const usize obj_size, const OAConfig& config):
     page_size -= config.PadBytes_ - config.InterAlignSize_;
   }
 
-  page_list = allocate_raw_page(nullptr, free_list);
+  page_list = allocate_raw_page(nullptr);
 
   statistics.PageSize_ = page_size;
   statistics.ObjectSize_ = object_size;
 }
 
 ObjectAllocator::~ObjectAllocator() noexcept {
-  /* TODO: free memory */
+  GenericObject* page = &as_list(page_list);
+
+  while (page) {
+    const u8* const to_delete = as_bytes(page);
+    page = page->Next;
+    delete[] to_delete;
+  }
+
 }
 
 void* ObjectAllocator::Allocate(const char*) {
@@ -46,7 +54,7 @@ void* ObjectAllocator::Allocate(const char*) {
   // TODO: trigger in-use flag
 
   if (free_list == nullptr) {
-    page_list = allocate_raw_page(&as_list(page_list), free_list);
+    page_list = allocate_raw_page(&as_list(page_list));
   }
 
   u8* obj = free_list;
@@ -55,19 +63,38 @@ void* ObjectAllocator::Allocate(const char*) {
 
   // TODO: debug patterns
   if (config.DebugOn_) {
-    // memset(free_list, ALLOCATED_PATTERN, object_size);
-    // memset(free_list + object_size, PAD_PATTERN, config.PadBytes_);
+    memset(obj, ALLOCATED_PATTERN, object_size);
+    memset(obj + object_size, PAD_PATTERN, config.PadBytes_);
   }
 
-  statistics.MostObjects_++;
+  statistics.ObjectsInUse_++;
+
+  // m = max(m, o)
+  statistics.MostObjects_ = statistics.ObjectsInUse_ > statistics.MostObjects_
+                              ? statistics.ObjectsInUse_
+                              : statistics.MostObjects_;
   return obj;
 }
 
-void ObjectAllocator::Free(void* block_void_ptr) {
+void ObjectAllocator::Free(void* const block_void_ptr) {
+  if (not block_void_ptr) {
+    return;
+  }
   // TODO: check for boundry errors ()
   /* OAException::E_BAD_BOUNDARY; */
 
-  u8* block = reinterpret_cast<u8*>(block_void_ptr);
+  if (config.DebugOn_) {
+    // check for double free
+    if (is_in_free_list(block_void_ptr)) {
+      throw OAException(
+        OAException::E_MULTIPLE_FREE,
+        "Block has already been freed"
+      );
+    }
+    statistics.ObjectsInUse_--;
+  }
+
+  u8* block = static_cast<u8*>(block_void_ptr);
 
   as_list(block).Next = &as_list(free_list);
   free_list = as_bytes(block);
@@ -107,8 +134,7 @@ const GenericObject& ObjectAllocator::as_list(const u8* bytes) {
 }
 
 u8* ObjectAllocator::allocate_raw_page(
-  GenericObject* next,
-  u8*& free_list_ref
+  GenericObject* next
 ) {
   allocated_pages++;
 
@@ -145,11 +171,22 @@ u8* ObjectAllocator::allocate_raw_page(
       &as_list(first_obj + stride * (i - 1));
   }
 
-  GenericObject& old_free = as_list(free_list_ref);
-  free_list_ref = first_obj + stride * (config.ObjectsPerPage_ - 1);
+  GenericObject& old_free = as_list(free_list);
+
+  free_list = first_obj + stride * (config.ObjectsPerPage_ - 1);
+
   as_list(free_list).Next = &old_free;
 
-  as_list(first_obj).Next = nullptr;
   statistics.FreeObjects_ += config.ObjectsPerPage_;
   return memory;
+}
+
+bool ObjectAllocator::is_in_free_list(void* ptr) const {
+  for (const GenericObject* free = &as_list(free_list); free;
+       free = free->Next) {
+    if (free == ptr) {
+      return true;
+    }
+  }
+  return false;
 }
