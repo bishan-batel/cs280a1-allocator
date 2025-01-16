@@ -402,12 +402,14 @@ private:
     return as_bytes(&bytes);
   }
 
+  auto init_header_blocks_for_page(u8* first_header) -> void;
+
   /**
    * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
    */
   u8 *allocate_raw_page(GenericObject *next);
 
-  bool is_in_free_list(void* ptr) const;
+  bool is_in_free_list(void *ptr) const;
 
   // Some "suggested" members (only a suggestion!)
   u8 *page_list{nullptr}; //!< the beginning of the list of pages
@@ -416,7 +418,18 @@ private:
   OAConfig config;
   OAStats statistics{};
 
-  usize allocated_pages{0}, object_size, block_size, page_size;
+  usize allocated_pages{0};
+
+  usize object_size;
+
+  /**
+  * @brief Size of a block (without alignment)
+  */
+  usize block_size;
+
+  usize page_size;
+
+  usize header_stride{0};
 
   // Lots of other private stuff...
 };
