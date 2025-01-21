@@ -57,7 +57,7 @@ BreakAfterAttributes: Leave
 # AlwaysBreakAfterDefinitionReturnType: None
 # AlwaysBreakAfterReturnType: None
 PenaltyReturnTypeOnItsOwnLine: 9990
-ColumnLimit: 80
+ColumnLimit: 120
 ConstructorInitializerAllOnOneLineOrOnePerLine: true
 IncludeCategories: 
   - Regex: '^<.*'

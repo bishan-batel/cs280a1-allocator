@@ -154,11 +154,11 @@ struct OAConfig final {
      * @param type The kind of header blocks in use.
      * @param additional The number of user-defined additional bytes required.
      */
-    HeaderBlockInfo(HBLOCK_TYPE type = hbNone, unsigned additional = 0)
+    HeaderBlockInfo(HBLOCK_TYPE type = hbNone, u32 additional = 0)
       : type_(type), size_(0), additional_(additional) {
       if (type_ == hbBasic) size_ = BASIC_HEADER_SIZE;
       else if (type_ == hbExtended) // alloc # + use counter + flag byte + user-defined
-        size_ = sizeof(unsigned int) + sizeof(unsigned short) + sizeof(char) + additional_;
+        size_ = sizeof(u32) + sizeof(u16) + sizeof(u8) + additional_;
       else if (type_ == hbExternal) size_ = EXTERNAL_HEADER_SIZE;
     };
   };
@@ -248,13 +248,15 @@ struct GenericObject {
   GenericObject *Next; //!< The next object in the list
 };
 
+static_assert(sizeof(GenericObject) == sizeof(void*), "GenericObject has non transparent alignment/sizing");
+
 /**
  * This is used with external headers
  */
 struct MemBlockInfo {
   bool in_use; //!< Is the block free or in use?
   char *label; //!< A dynamically allocated NUL-terminated string
-  unsigned alloc_num; //!< The allocation number (count) of this block
+  u32 alloc_num; //!< The allocation number (count) of this block
 };
 
 /**
@@ -273,6 +275,12 @@ public:
   static constexpr u8 FREED_PATTERN = 0xCC; //!< Memory returned by the client
   static constexpr u8 PAD_PATTERN = 0xDD; //!< Pad signature to detect buffer over/under flow
   static constexpr u8 ALIGN_PATTERN = 0xEE; //!< For the alignment bytes
+
+  static constexpr usize ALLOC_ID_BYTES = sizeof(u32);
+  static constexpr usize USE_COUNTER_BYTES = sizeof(u16);
+
+  static_assert(ALLOC_ID_BYTES == 4, "");
+  static_assert(USE_COUNTER_BYTES == 2, "");
 
   /*
    * Creates the ObjectManager per the specified values
@@ -303,12 +311,12 @@ public:
   /*
    * Calls the callback fn for each block still in use
    */
-  u32 DumpMemoryInUse(DUMPCALLBACK fn) const;
+  u32 DumpMemoryInUse(DUMPCALLBACK callback) const;
 
   /*
    * Calls the callback fn for each block that is potentially corrupted
    */
-  u32 ValidatePages(VALIDATECALLBACK fn) const;
+  u32 ValidatePages(VALIDATECALLBACK callback) const;
 
   /*
    * Frees all empty pages (extra credit)
@@ -360,6 +368,8 @@ private:
     return eq;
   }
 
+  auto validate_boundary(const u8* block) const -> void;
+
   /**
    * @brief Converts bytes to a generic object reference
    */
@@ -402,32 +412,46 @@ private:
     return as_bytes(&bytes);
   }
 
-  auto init_header_blocks_for_page(u8* first_header) -> void;
+  void init_header_blocks_for_page(u8 *first_header) const;
 
   /**
    * @brief Allocates data for a new page and sets the next pointer for you (this also memsets to UNALLOCATED_PATTERn)
    */
-  u8 *allocate_raw_page(GenericObject *next);
+  u8 *allocate_page(GenericObject *next);
 
-  bool is_in_free_list(void *ptr) const;
+  bool is_in_free_list(const u8 *ptr) const;
+
+  /**
+   * @brief Checks if the given page has no corrupted padding bytes
+   */
+  bool validate_page(const u8 *page) const;
+
+  void setup_alllocated_header(u8 *header, const char *label) const;
+
+  void setup_freed_header(u8 *header) const;
+
+  /**
+   * @brief Checks if all bytes in the given span match the pattern
+   */
+  static bool is_signed_as(const u8 *ptr, usize extents, u8 pattern);
 
   // Some "suggested" members (only a suggestion!)
   u8 *page_list{nullptr}; //!< the beginning of the list of pages
   u8 *free_list{nullptr}; //!< the beginning of the list of objects
 
-  OAConfig config;
+  OAConfig config{};
   OAStats statistics{};
 
   usize allocated_pages{0};
 
-  usize object_size;
+  usize object_size{0};
 
   /**
   * @brief Size of a block (without alignment)
   */
-  usize block_size;
+  usize block_size{0};
 
-  usize page_size;
+  usize page_size{0};
 
   usize header_stride{0};
 
