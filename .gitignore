@@ -6,3 +6,4 @@ build/
 *.log
 difference*
 .cache/
+output.txt

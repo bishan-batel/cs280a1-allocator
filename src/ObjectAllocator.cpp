@@ -1,28 +1,41 @@
 #include "ObjectAllocator.h"
+#include <cassert>
+#include <cstddef>
 #include <cstring>
+#include <iostream>
+#include <ostream>
 
 // NOLINTBEGIN(*-exception-baseclass)
 
-ObjectAllocator::ObjectAllocator(const usize obj_size, const OAConfig& config):
-  config{config},
-  object_size{obj_size},
-  page_size{0} {
+ObjectAllocator::ObjectAllocator(const usize obj_size, const OAConfig& src_config):
+    config{src_config}, object_size{obj_size}, page_size{0} {
 
   // allocate first page
 
   // TODO: Calculate InterAlignment & LeftAlignment
 
-  header_stride = config.HBlockInfo_.size_ + 2 * config.PadBytes_ + object_size
-                  + config.InterAlignSize_;
+  if (config.Alignment_ != 0) {
+    config.LeftAlignSize_ =
+      static_cast<u32>((sizeof(GenericObject) + config.PadBytes_ + config.HBlockInfo_.size_) % config.Alignment_);
 
-  block_size = config.HBlockInfo_.size_ // header size
-               + config.PadBytes_ // left intern pad size
-               + object_size // acc object size
-               + config.PadBytes_; // right intern pad size
+    config.LeftAlignSize_ = (config.Alignment_ - config.LeftAlignSize_) % config.Alignment_;
 
-  page_size = //
-    sizeof(GenericObject) // next page ptr
-    + config.LeftAlignSize_ // ptr alignment
+    config.InterAlignSize_ =
+      static_cast<u32>((object_size + config.PadBytes_ * 2 + config.HBlockInfo_.size_) % config.Alignment_);
+
+    config.InterAlignSize_ = (config.Alignment_ - config.InterAlignSize_) % config.Alignment_;
+  }
+
+  block_stride = config.HBlockInfo_.size_ + config.PadBytes_ + object_size + config.PadBytes_ + config.InterAlignSize_;
+
+  block_size = config.HBlockInfo_.size_   // header size
+             + config.PadBytes_           // left intern pad size
+             + object_size                // acc object size
+             + config.PadBytes_;          // right intern pad size
+
+  page_size =                             //
+    sizeof(GenericObject)                 // next page ptr
+    + config.LeftAlignSize_               // ptr alignment
     + block_size * config.ObjectsPerPage_ // per block size
     // intern align size - the first ones
     + config.InterAlignSize_ * (config.ObjectsPerPage_ - 1);
@@ -31,7 +44,7 @@ ObjectAllocator::ObjectAllocator(const usize obj_size, const OAConfig& config):
   statistics.ObjectSize_ = object_size;
 
   if (not config.UseCPPMemManager_) {
-    page_list = allocate_page(nullptr);
+    allocate_page();
   }
 }
 
@@ -39,9 +52,9 @@ ObjectAllocator::~ObjectAllocator() noexcept {
   GenericObject* page = &as_list(page_list);
 
   while (page) {
-    const u8* const to_delete = as_bytes(page);
+    u8* const to_delete = as_bytes(page);
     page = page->Next;
-    delete[] to_delete;
+    free_page(to_delete);
   }
 }
 
@@ -50,18 +63,19 @@ void* ObjectAllocator::Allocate(const char* label) {
   // TODO: trigger in-use flag
 
   // if no more free blocks try to allocate a new page
-  if (not config.UseCPPMemManager_ and free_list == nullptr) {
-    page_list = allocate_page(&as_list(page_list));
-  }
 
-  u8* header{nullptr};
+  u8* block{nullptr};
 
   if (not config.UseCPPMemManager_) {
-    header = free_list;
+    if (free_list == nullptr) {
+      allocate_page();
+    }
+
+    block = free_list;
     free_list = as_bytes(as_list(free_list).Next);
   } else {
     try {
-      header = new u8[block_size];
+      block = new u8[object_size];
     } catch (const std::bad_alloc&) {
       throw OAException(OAException::E_NO_MEMORY, "'new[]' threw bad alloc.");
     }
@@ -71,24 +85,23 @@ void* ObjectAllocator::Allocate(const char* label) {
   statistics.ObjectsInUse_++;
   statistics.Allocations_++;
   statistics.FreeObjects_--;
-  statistics.MostObjects_ = statistics.ObjectsInUse_ > statistics.MostObjects_
-                              ? statistics.ObjectsInUse_
-                              : statistics.MostObjects_;
+  statistics.MostObjects_ =
+    statistics.ObjectsInUse_ > statistics.MostObjects_ ? statistics.ObjectsInUse_ : statistics.MostObjects_;
 
-  setup_alllocated_header(header, label);
+  setup_allocated_header(block - config.PadBytes_ - config.HBlockInfo_.size_, label);
 
   if (config.DebugOn_) {
-    u8* pos = header + config.HBlockInfo_.size_;
+    u8* pos = block - config.PadBytes_;
     memset(pos, PAD_PATTERN, config.PadBytes_);
     pos += config.PadBytes_;
 
-    memset(pos, ALLOCATED_PATTERN, block_size);
-    pos += block_size;
+    memset(pos, ALLOCATED_PATTERN, object_size);
+    pos += object_size;
 
     memset(pos, PAD_PATTERN, config.PadBytes_);
   }
 
-  return header + config.HBlockInfo_.size_ + config.PadBytes_;
+  return block;
 }
 
 void ObjectAllocator::Free(void* const block_void_ptr) {
@@ -96,23 +109,22 @@ void ObjectAllocator::Free(void* const block_void_ptr) {
     return;
   }
 
-  u8* const block = static_cast<u8*>(block_void_ptr) - config.HBlockInfo_.size_ - config.PadBytes_;
+  u8* const block = static_cast<u8*>(block_void_ptr);
 
-  if (not config.UseCPPMemManager_) {
+  if (config.DebugOn_ and not config.UseCPPMemManager_) {
     validate_boundary(block);
-  }
 
-  if (config.DebugOn_) {
     // check for double free
-    if (not config.UseCPPMemManager_ and is_in_free_list(as_bytes(block))) {
-      throw OAException(
-        OAException::E_MULTIPLE_FREE,
-        "Block has already been freed"
-      );
+    if (is_in_free_list(block)) {
+      throw OAException(OAException::E_MULTIPLE_FREE, "Block has already been freed");
+    }
+
+    if (not validate_block(block)) {
+      throw OAException(OAException::E_CORRUPTED_BLOCK, "Corrupted Block");
     }
   }
 
-  setup_freed_header(block);
+  setup_freed_header(block - config.PadBytes_ - config.HBlockInfo_.size_);
 
   statistics.ObjectsInUse_--;
   statistics.Deallocations_++;
@@ -128,14 +140,10 @@ void ObjectAllocator::Free(void* const block_void_ptr) {
   }
 
   as_list(block).Next = &as_list(free_list);
-  free_list = as_bytes(block);
+  free_list = block;
 }
 
 auto ObjectAllocator::validate_boundary(const u8* block) const -> void {
-  if (not config.DebugOn_) {
-    return;
-  }
-
   for (const GenericObject* page = &as_list(page_list); page; page = page->Next) {
     const u8* const page_min = as_bytes(page);
     const u8* const page_max = page_min + page_size;
@@ -144,9 +152,14 @@ auto ObjectAllocator::validate_boundary(const u8* block) const -> void {
       continue;
     }
 
-    const u8* first_block = as_bytes(page) + config.LeftAlignSize_ + sizeof(GenericObject);
+    const u8* first_block =
+      as_bytes(page) + config.LeftAlignSize_ + sizeof(GenericObject) + config.HBlockInfo_.size_ + config.PadBytes_;
 
-    if ((block - first_block) % header_stride != 0) {
+    if (block < first_block) {
+      throw OAException(OAException::E_BAD_BOUNDARY, "Invalid Boundry");
+    }
+
+    if ((block - first_block) % static_cast<std::ptrdiff_t>(block_stride) != 0) {
       throw OAException(OAException::E_BAD_BOUNDARY, "Invalid Boundry");
     }
 
@@ -157,21 +170,22 @@ auto ObjectAllocator::validate_boundary(const u8* block) const -> void {
 }
 
 u32 ObjectAllocator::DumpMemoryInUse(const DUMPCALLBACK callback) const {
-  usize in_use{0};
+  u32 in_use{0};
 
   for (const GenericObject* page = &as_list(page_list); page; page = page->Next) {
-    const u8* first_block = as_bytes(page) + +config.LeftAlignSize_;
+    const u8* first_block =
+      as_bytes(page) + sizeof(GenericObject) + config.LeftAlignSize_ + config.HBlockInfo_.size_ + config.PadBytes_;
 
     for (usize i = 0; i < config.ObjectsPerPage_; i++) {
-      const u8* block = first_block + i * header_stride;
-      if (is_in_free_list(block)) {
+      const u8* block = first_block + i * block_stride;
+      if (not is_in_free_list(block)) {
         in_use++;
-        callback(block, block_size);
+        callback(block, object_size);
       }
     }
   }
 
-  return 0;
+  return in_use;
 }
 
 u32 ObjectAllocator::ValidatePages(const VALIDATECALLBACK callback) const {
@@ -180,26 +194,125 @@ u32 ObjectAllocator::ValidatePages(const VALIDATECALLBACK callback) const {
   }
 
   const GenericObject* page = &as_list(page_list);
-  usize invalid_count{0};
+  u32 invalid_count{0};
 
   while (page) {
-    if (not validate_page(as_bytes(page))) {
-      callback(page, block_size);
-      invalid_count++;
-    }
+    const u8* first_block =
+      as_bytes(page) + sizeof(GenericObject) + config.LeftAlignSize_ + config.HBlockInfo_.size_ + config.PadBytes_;
+
+    for (usize i = 0; i < config.ObjectsPerPage_; i++) {
+      const u8* const block = first_block + block_stride * i;
+      if (not validate_block(block)) {
+        callback(block, object_size);
+        invalid_count++;
+      }
+    };
+
     page = page->Next;
   }
 
-  return 0;
+  return invalid_count;
+}
+
+void ObjectAllocator::free_page(u8* const page) const {
+  if (config.HBlockInfo_.type_ != OAConfig::hbExternal) {
+    delete[] page;
+    return;
+  }
+
+  u8* const first_header = page + sizeof(GenericObject) + config.LeftAlignSize_;
+
+  for (usize i = 0; i < config.ObjectsPerPage_; i++) {
+    MemBlockInfo*& info = *reinterpret_cast<MemBlockInfo**>(first_header + i * block_stride);
+
+    if (info == nullptr) {
+      continue;
+    }
+
+    if (info->label) {
+      delete[] info->label;
+    }
+
+    delete info;
+  }
 }
 
 u32 ObjectAllocator::FreeEmptyPages() {
-  return 0;
+  u32 freed{0};
+
+  GenericObject* prev = nullptr;
+  GenericObject* page = &as_list(page_list);
+  while (page) {
+
+    if (not is_page_empty(as_bytes(page))) {
+      prev = page;
+      page = page->Next;
+      continue;
+    }
+
+    freed++;
+
+    GenericObject* next = page->Next;
+    cull_free_blocks_in_page(as_bytes(page));
+    free_page(as_bytes(page));
+    statistics.PagesInUse_--;
+
+    page = next;
+
+    if (prev) {
+      prev->Next = page;
+    } else {
+      page_list = as_bytes(page);
+    }
+    continue;
+  }
+
+  return freed;
 }
 
-void ObjectAllocator::SetDebugState(const bool State) {
-  config.DebugOn_ = State;
+void ObjectAllocator::cull_free_blocks_in_page(const u8* const page) {
+
+  GenericObject* prev = nullptr;
+  GenericObject* free = &as_list(free_list);
+
+  while (free) {
+    const u8* bytes = as_bytes(free);
+
+    if (not(bytes > page and bytes < page + page_size)) {
+      prev = free;
+      free = free->Next;
+      continue;
+    }
+
+    statistics.FreeObjects_--;
+
+    GenericObject* next = free->Next;
+    free = next;
+
+    if (prev) {
+      prev->Next = free;
+    } else {
+      free_list = as_bytes(free);
+    }
+
+    continue;
+  }
 }
+
+bool ObjectAllocator::is_page_empty(u8* page) const {
+  const u8* first_block =
+    as_bytes(page) + sizeof(GenericObject) + config.LeftAlignSize_ + config.HBlockInfo_.size_ + config.PadBytes_;
+
+  for (usize i = 0; i < config.ObjectsPerPage_; i++) {
+    const u8* block = first_block + i * block_stride;
+    if (not is_in_free_list(block)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void ObjectAllocator::SetDebugState(const bool State) { config.DebugOn_ = State; }
 
 const void* ObjectAllocator::GetFreeList() const { return free_list; }
 
@@ -209,10 +322,9 @@ const OAConfig& ObjectAllocator::GetConfig() const { return config; }
 
 const OAStats& ObjectAllocator::GetStats() const { return statistics; }
 
-bool ObjectAllocator::ImplementedExtraCredit() { return false; }
+bool ObjectAllocator::ImplementedExtraCredit() { return true; }
 
-GenericObject& ObjectAllocator::as_list(
-  u8* const bytes // NOLINT(*-non-const-parameter)
+GenericObject& ObjectAllocator::as_list(u8* const bytes // NOLINT(*-non-const-parameter)
 ) {
   return *reinterpret_cast<GenericObject*>(bytes);
 }
@@ -221,132 +333,105 @@ const GenericObject& ObjectAllocator::as_list(const u8* const bytes) {
   return *reinterpret_cast<const GenericObject*>(bytes);
 }
 
-u8* ObjectAllocator::allocate_page(GenericObject* const next) {
-  if (config.MaxPages_ != 0 and allocated_pages >= config.MaxPages_) {
+void ObjectAllocator::allocate_page() {
+  if (config.MaxPages_ != 0 and statistics.PagesInUse_ >= config.MaxPages_) {
     throw OAException(OAException::E_NO_PAGES, "Out of pages");
   }
-
-  allocated_pages++;
 
   u8* memory;
 
   try {
-    memory = new u8[page_size];
+    memory = new u8[page_size]{};
   } catch (const std::bad_alloc& err) {
     throw OAException(OAException::E_NO_MEMORY, err.what());
   }
 
-  page_list = memory;
-
-  // signing
-  if (config.DebugOn_) {
-    memset(page_list, UNALLOCATED_PATTERN, page_size);
-
-    memset(
-      page_list + sizeof(GenericObject),
-      ALIGN_PATTERN,
-      config.LeftAlignSize_
-    );
-  }
-
-  as_list(page_list).Next = next;
-
   // up the stat, was added to the list
   statistics.PagesInUse_++;
 
+  as_list(memory).Next = &as_list(page_list);
+  page_list = memory;
+
+  // signing
+  //
+  if (config.DebugOn_) {
+    memset(page_list + sizeof(GenericObject), ALIGN_PATTERN, config.LeftAlignSize_);
+  }
+
   u8* const first_obj =
-    page_list + sizeof(GenericObject) // pointer
-    + config.LeftAlignSize_; // alignment bytes before first header
+    page_list + sizeof(GenericObject) + config.HBlockInfo_.size_ + config.LeftAlignSize_ + config.PadBytes_;
+
+  for (usize i = 0; i < config.ObjectsPerPage_; i++) {
+    u8* block = first_obj + block_stride * i - config.PadBytes_;
+
+    // skipover header
+    memset(block, PAD_PATTERN, config.PadBytes_);
+    block += config.PadBytes_;
+
+    memset(block, UNALLOCATED_PATTERN, object_size);
+    block += object_size;
+
+    memset(block, PAD_PATTERN, config.PadBytes_);
+  }
 
   for (usize i = 1; i < config.ObjectsPerPage_; i++) {
-    u8* const header_block = first_obj + header_stride * i;
-    u8* const prev_block = first_obj + header_stride * (i - 1);
-    as_list(header_block).Next = &as_list(prev_block);
+    u8* const block = first_obj + block_stride * i;
+    u8* const prev_block = first_obj + block_stride * (i - 1);
 
     if (config.DebugOn_) {
-      memset(
-        prev_block + config.PadBytes_ * 2 + object_size,
-        ALIGN_PATTERN,
-        config.InterAlignSize_
-      );
+      memset(prev_block + object_size + config.PadBytes_, ALIGN_PATTERN, config.InterAlignSize_);
     }
+
+    as_list(block).Next = &as_list(prev_block);
   }
 
   // initialise header blocks
-  init_header_blocks_for_page(first_obj);
+  init_header_blocks_for_page(first_obj - config.PadBytes_ - config.HBlockInfo_.size_);
 
-  GenericObject& old_free = as_list(free_list);
-
-  free_list = first_obj + header_stride * (config.ObjectsPerPage_ - 1);
-  as_list(first_obj).Next = &old_free;
+  as_list(first_obj).Next = &as_list(free_list);
+  free_list = first_obj + block_stride * (config.ObjectsPerPage_ - 1);
 
   statistics.FreeObjects_ += config.ObjectsPerPage_;
-  return memory;
 }
 
-void ObjectAllocator::init_header_blocks_for_page(
-  u8* const first_header
-) const {
+void ObjectAllocator::init_header_blocks_for_page(u8* const first_header) const {
   if (config.HBlockInfo_.size_ == 0) {
     return;
   }
-
-  if (config.HBlockInfo_.type_ == OAConfig::hbExternal) {
-    for (usize i = 0; i < config.ObjectsPerPage_; i++) {
-      u8* header = first_header + i * header_stride;
-      *reinterpret_cast<void**>(header) = nullptr;
-    }
-
-    return;
-  }
-
-  // setup first header as default
-  {
-    u8* header = first_header;
-    if (config.HBlockInfo_.type_ == OAConfig::hbExtended) {
-      // part of the header for user defined bits
-      memset(first_header, 0, config.HBlockInfo_.additional_);
-      header += config.HBlockInfo_.additional_;
-
-      // part of the header that is the allocation tracker
-      *reinterpret_cast<u16*>(header) = 0;
-      header += sizeof(u16);
-    }
-
-    // part of the header (4bytes) is the allocation #
-    *reinterpret_cast<u32*>(header) = 0;
-    header += sizeof(u32);
-
-    // part of the header (1byte) is the in use flag
-    *header = 0;
-  }
-
   // memcpy the default header to each one to skip multiple branches
-  for (usize i = 1; i < config.ObjectsPerPage_; i++) {
-    memcpy(
-      first_header + i * header_stride,
-      first_header,
-      config.HBlockInfo_.size_
-    );
+  for (usize i = 0; i < config.ObjectsPerPage_; i++) {
+    memset(first_header + i * block_stride, 0, config.HBlockInfo_.size_);
   }
 }
 
-bool ObjectAllocator::is_in_free_list(const u8* const header) const {
-  switch (config.HBlockInfo_.type_) {
-    case OAConfig::hbBasic: return header[ALLOC_ID_BYTES] & 0x1;
+bool ObjectAllocator::is_in_free_list(const u8* const block) const {
+  const u8* header = block - config.PadBytes_ - config.HBlockInfo_.size_;
 
-    case OAConfig::hbExtended: {
-      const u8 flag = header[USE_COUNTER_BYTES + ALLOC_ID_BYTES + config.HBlockInfo_.additional_];
-      return flag & 0x1;
-    }
+  switch (config.HBlockInfo_.type_) {
+    case OAConfig::hbBasic:
+      {
+        return (*(header + ALLOC_ID_BYTES) & 0x1) == 0;
+      }
+
+    case OAConfig::hbExtended:
+      {
+        const u8 flag = header[USE_COUNTER_BYTES + ALLOC_ID_BYTES + config.HBlockInfo_.additional_];
+        return (flag & 0x1) == 0;
+      }
+
+    case OAConfig::hbExternal:
+      {
+        return *reinterpret_cast<const MemBlockInfo* const*>(header) == nullptr;
+      }
 
     case OAConfig::hbNone:
-    case OAConfig::hbExternal:
     default: break;
   }
 
-  for (const GenericObject* free = &as_list(free_list); free; free = free->Next) {
-    if (as_bytes(free) == header) {
+  const GenericObject* free = &as_list(free_list);
+
+  for (; free; free = free->Next) {
+    if (free == &as_list(block)) {
       return true;
     }
   }
@@ -357,18 +442,12 @@ bool ObjectAllocator::is_in_free_list(const u8* const header) const {
 bool ObjectAllocator::validate_page(const u8* const page) const {
   // skip over to the first block
 
-  const u8* first_block = page + sizeof(GenericObject) + config.LeftAlignSize_;
+  const u8* first_block =
+    page + sizeof(GenericObject) + config.LeftAlignSize_ + config.HBlockInfo_.size_ + config.PadBytes_;
 
   for (usize i = 0; i < config.ObjectsPerPage_ - 1; i++) {
-    const u8* const block = first_block + header_stride * i;
-
-    // left pad byte signature check
-    if (not is_signed_as(block + config.HBlockInfo_.size_, config.PadBytes_, PAD_PATTERN)) {
-      return false;
-    }
-
-    // right pad byte signature check
-    if (not is_signed_as(block + config.HBlockInfo_.size_ + object_size, config.PadBytes_, PAD_PATTERN)) {
+    const u8* const block = first_block + block_stride * i;
+    if (not validate_block(block)) {
       return false;
     }
   };
@@ -376,55 +455,68 @@ bool ObjectAllocator::validate_page(const u8* const page) const {
   return true;
 }
 
-void ObjectAllocator::setup_alllocated_header(u8* const header, const char* label) const {
+bool ObjectAllocator::validate_block(const u8* block) const {
+  // left pad byte signature check
+  if (not is_signed_as(block - config.PadBytes_, config.PadBytes_, PAD_PATTERN)) {
+    return false;
+  }
+
+  // right pad byte signature check
+  if (not is_signed_as(block + object_size, config.PadBytes_, PAD_PATTERN)) {
+    return false;
+  }
+
+  return true;
+}
+
+void ObjectAllocator::setup_allocated_header(u8* const header, const char* label) const {
   if (config.HBlockInfo_.size_ == 0) {
     return;
   }
 
   switch (config.HBlockInfo_.type_) {
-    case OAConfig::hbBasic: {
-      // set allocation number ID
-      *reinterpret_cast<u32*>(header) = statistics.Allocations_;
+    case OAConfig::hbBasic:
+      {
+        // set allocation number ID
+        *reinterpret_cast<u32*>(header) = statistics.Allocations_;
 
-      // set in use flag to on
-      header[ALLOC_ID_BYTES] |= 0x1;
-      return;
-    }
-    case OAConfig::hbExtended: {
-      u8* pos = header;
-
-      // set additional user defined bytes to 0
-      memset(pos, 0, config.HBlockInfo_.additional_);
-      pos += config.HBlockInfo_.additional_;
-
-      // set allocation number ID
-      (*reinterpret_cast<u16*>(pos))++;
-      pos += USE_COUNTER_BYTES;
-
-      *reinterpret_cast<u32*>(pos) = statistics.Allocations_;
-      pos += ALLOC_ID_BYTES;
-
-      // set in use flag to on
-      *pos |= 0x1;
-      return;
-    }
-    case OAConfig::hbExternal: {
-
-      char* label_copy = nullptr;
-
-      if (label != nullptr) {
-        label_copy = new char[strlen(label) + 1]{};
-        // strcpy(label_copy, label);
+        // set in use flag to on
+        *(header + sizeof(u32)) |= 0x1;
+        return;
       }
+    case OAConfig::hbExtended:
+      {
+        u8* pos = header;
 
-      *reinterpret_cast<MemBlockInfo**>(header) = new MemBlockInfo{
-        true,
-        label_copy,
-        statistics.Allocations_
-      };
+        // set additional user defined bytes to 0
+        memset(pos, 0, config.HBlockInfo_.additional_);
+        pos += config.HBlockInfo_.additional_;
 
-      return;
-    }
+        // set allocation number ID
+        (*reinterpret_cast<u16*>(pos))++;
+        pos += sizeof(u16);
+
+        *reinterpret_cast<u32*>(pos) = statistics.Allocations_;
+        pos += sizeof(u32);
+
+        // set in use flag to on
+        *pos |= 0x1;
+        return;
+      }
+    case OAConfig::hbExternal:
+      {
+
+        char* label_copy = nullptr;
+
+        if (label != nullptr) {
+          label_copy = new char[strlen(label) + 1]{};
+          strcpy(label_copy, label);
+        }
+
+        *reinterpret_cast<MemBlockInfo**>(header) = new MemBlockInfo{true, label_copy, statistics.Allocations_};
+
+        return;
+      }
     case OAConfig::hbNone:
     default: break;
   }
@@ -436,58 +528,60 @@ void ObjectAllocator::setup_freed_header(u8* header) const {
   }
 
   switch (config.HBlockInfo_.type_) {
-    case OAConfig::hbBasic: {
-      // set in use flag to off
-      header[ALLOC_ID_BYTES] &= ~0x1;
-      return;
-    }
-    case OAConfig::hbExtended: {
-      u8* pos = header;
+    case OAConfig::hbBasic:
+      {
+        // set in use flag to off
+        *reinterpret_cast<u32*>(header) = 0;
+        header[ALLOC_ID_BYTES] &= ~0x1;
+        return;
+      }
+    case OAConfig::hbExtended:
+      {
+        u8* pos = header;
 
-      // skip over user bytes
-      pos += config.HBlockInfo_.additional_;
+        // skip over user bytes
+        pos += config.HBlockInfo_.additional_;
 
-      // skip over user counter
-      pos += USE_COUNTER_BYTES;
+        // skip over user counter
+        pos += USE_COUNTER_BYTES;
 
-      // skip over allocated ID
-      pos += ALLOC_ID_BYTES;
+        *reinterpret_cast<u32*>(pos) = 0;
+        pos += ALLOC_ID_BYTES;
 
-      // set in use flag to off
-      *pos &= ~0x1;
-      return;
-    }
-    case OAConfig::hbExternal: {
-      MemBlockInfo** info = reinterpret_cast<MemBlockInfo**>(header);
+        // set in use flag to off
+        *pos &= ~0x1;
+        return;
+      }
+    case OAConfig::hbExternal:
+      {
+        MemBlockInfo** info = reinterpret_cast<MemBlockInfo**>(header);
 
-      // delete the label
-      delete[] (*info)->label;
+        // delete the label
+        if ((*info)->label) {
+          delete[] (*info)->label;
+        }
 
-      // delete the external data
-      delete *info;
+        // delete the external data
+        delete *info;
 
-      *info = nullptr;
+        *info = nullptr;
 
-      return;
-    }
+        return;
+      }
     case OAConfig::hbNone:
     default: break;
   }
 }
 
-bool ObjectAllocator::is_signed_as(
-  const u8* ptr,
-  const usize extents,
-  const u8 pattern
-) {
-
-  usize valid_bytes{0};
+bool ObjectAllocator::is_signed_as(const u8* ptr, const usize extents, const u8 pattern) {
 
   for (usize i = 0; i < extents; i++) {
-    valid_bytes += ptr[i] == pattern;
+    if (ptr[i] != pattern) {
+      return false;
+    }
   }
 
-  return valid_bytes == extents;
+  return true;
 }
 
 // NOLINTEND(*-exception-baseclass)

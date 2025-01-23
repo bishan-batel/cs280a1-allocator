@@ -28,6 +28,7 @@
 
           buildInputs = with pkgs; [
             llvmPackages.clang-tools
+            llvmPackages_18.lldb 
           ];
         };
     });
