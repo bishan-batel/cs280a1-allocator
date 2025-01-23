@@ -235,6 +235,8 @@ void ObjectAllocator::free_page(u8* const page) const {
 
     delete info;
   }
+
+  delete[] page;
 }
 
 u32 ObjectAllocator::FreeEmptyPages() {
