@@ -532,7 +532,7 @@ void ObjectAllocator::setup_freed_header(u8* header) const {
       {
         // set in use flag to off
         *reinterpret_cast<u32*>(header) = 0;
-        header[sizeof(u32)] &= ~0x1;
+        header[sizeof(u32)] &= ~static_cast<u8>(0x1);
         return;
       }
     case OAConfig::hbExtended:
@@ -549,7 +549,7 @@ void ObjectAllocator::setup_freed_header(u8* header) const {
         pos += sizeof(u32);
 
         // set in use flag to off
-        *pos &= ~0x1;
+        *pos &= ~static_cast<u8>(0x1);
         return;
       }
     case OAConfig::hbExternal:
