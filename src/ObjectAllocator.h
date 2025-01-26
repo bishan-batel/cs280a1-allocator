@@ -274,9 +274,15 @@ struct MemBlockInfo {
 class ObjectAllocator final {
 public:
 
-  // Defined by the client (pointer to a block, size of block)
-  using DUMPCALLBACK = void (*)(const void*, usize);     //!< Callback function when dumping memory leaks
-  using VALIDATECALLBACK = void (*)(const void*, usize); //!< Callback function when validating blocks
+  /**
+   * @brief Callback function when dumping memory leaks
+   */
+  using DUMPCALLBACK = void (*)(const void*, usize);
+
+  /**
+   * @brief Callback function when validating blocks
+   */
+  using VALIDATECALLBACK = void (*)(const void*, usize);
 
   // Predefined values for memory signatures
 
@@ -285,12 +291,6 @@ public:
   static constexpr u8 FREED_PATTERN = 0xCC;       //!< Memory returned by the client
   static constexpr u8 PAD_PATTERN = 0xDD;         //!< Pad signature to detect buffer over/under flow
   static constexpr u8 ALIGN_PATTERN = 0xEE;       //!< For the alignment bytes
-
-  static constexpr usize ALLOC_ID_BYTES = sizeof(u32);
-  static constexpr usize USE_COUNTER_BYTES = sizeof(u16);
-
-  static_assert(ALLOC_ID_BYTES == 4, "");
-  static_assert(USE_COUNTER_BYTES == 2, "");
 
   /*
    * Creates the ObjectManager per the specified values
@@ -338,8 +338,9 @@ public:
    */
   static bool ImplementedExtraCredit();
 
-  // Testing/Debugging/Statistic methods
-
+  /**
+   * @brief Enables/Disables DebugMode
+   */
   void SetDebugState(bool State);
 
   /**
@@ -363,28 +364,32 @@ public:
   const OAStats& GetStats() const;
 
   // Prevent copy construction and assignment
+
   ObjectAllocator(const ObjectAllocator& oa) = delete;            //!< Do not implement!
+  ObjectAllocator(ObjectAllocator&&) = delete;                    //!< Do not implement!
   ObjectAllocator& operator=(const ObjectAllocator& oa) = delete; //!< Do not implement!
+  ObjectAllocator& operator=(ObjectAllocator&& oa) = delete;      //!< Do not implement!
+
 private:
 
-  template<typename T>
-  static bool all_bytes_eq(const T* span, const usize length, const u8 byte_pattern) {
-    const u8* begin = as_bytes(span);
-
-    bool eq{true};
-    for (usize i = 0; i < length; i++) {
-      eq = eq && begin[i] != byte_pattern;
-    }
-
-    return eq;
-  }
-
+  /**
+   * @brief Validates that a given block is on a valid boundry
+   */
   auto validate_boundary(const u8* block) const -> void;
 
+  /**
+   * @brief Checks if the page has no empty blocks
+   */
   bool is_page_empty(u8* page) const;
 
+  /* @brief
+   * Frees a given page (does not fix the linked list pointers)
+   */
   void free_page(u8* page) const;
 
+  /**
+   * @brief Remove all free blocks on the free list that match the given pge
+   */
   void cull_free_blocks_in_page(const u8* page);
 
   /**
@@ -400,19 +405,18 @@ private:
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  template<typename T>
-  static const u8* as_bytes(const T* bytes) {
-    return reinterpret_cast<const u8*>(bytes);
-  }
+  static const u8* as_bytes(const GenericObject* bytes);
 
   /**
    * @brief Converts a generic object to its bytes repr
    */
-  template<typename T>
-  static u8* as_bytes(T* bytes) {
-    return reinterpret_cast<u8*>(bytes);
-  }
+  static u8* as_bytes(GenericObject* bytes);
 
+  /**
+   * @brief Initialise all header blocks for the given page
+   *
+   * @parma first_header Pointer to the first header of the first block of a page
+   */
   void init_header_blocks_for_page(u8* first_header) const;
 
   /**
@@ -420,6 +424,9 @@ private:
    */
   void allocate_page();
 
+  /**
+   * @brief Checks if the given block is inside the free list
+   */
   bool is_in_free_list(const u8* ptr) const;
 
   /**
@@ -427,36 +434,60 @@ private:
    */
   bool validate_page(const u8* page) const;
 
+  /**
+   * @brief Validates that the block given is not corrupted
+   */
   bool validate_block(const u8* block) const;
 
+  /**
+   * @brief Book keeping for the header of a block being allocated
+   */
   void setup_allocated_header(u8* header, const char* label) const;
 
+  /**
+   * @brief Book keeping for the header of a block being freed
+   */
   void setup_freed_header(u8* header) const;
-
-
 
   /**
    * @brief Checks if all bytes in the given span match the pattern
    */
   static bool is_signed_as(const u8* ptr, usize extents, u8 pattern);
 
-  // Some "suggested" members (only a suggestion!)
-  u8* page_list{nullptr}; //!< the beginning of the list of pages
-  u8* free_list{nullptr}; //!< the beginning of the list of objects
+  /**
+   * @brief Start of the page list
+   */
+  u8* page_list{nullptr};
 
+  /**
+   * @brief Start of the free block list
+   */
+  u8* free_list{nullptr};
+
+  /**
+   * @brief Config for allocator
+   */
   OAConfig config{};
+
+  /**
+   * @brief Statistic Tracker
+   */
   OAStats statistics{};
 
+  /**
+   * @brief Size of one object
+   */
   usize object_size{0};
 
   /**
-   * @brief Size of a block (without alignment)
+   * @brief Size of one page
    */
-  usize block_size{0};
-
   usize page_size{0};
 
-  usize block_stride{0};
+  /**
+   * @brief Size of one block
+   */
+  usize block_size{0};
 
   // Lots of other private stuff...
 };
